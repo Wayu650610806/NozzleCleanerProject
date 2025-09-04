@@ -73,6 +73,7 @@ def _analyze_nozzles(
         for roi in quads:
             try:
                 statuses.append(bool(isBlockedHole(roi)))
+                # statuses.append(False)
             except Exception:
                 statuses.append(False)
         quad_statuses.append(statuses)
@@ -194,20 +195,28 @@ def developerTest(
     show: bool = True,
     wait_ms: int = 0,
     save_path: str | None = None,
+    save_rois: bool = True   # <<<< เพิ่ม option เซฟ ROI
 ) -> List[str]:
-    """วาด bbox, วงกลม, เส้นแบ่ง, ระบายสีตามสถานะ และยัง return รายชื่อที่ตัน"""
+    """วาด bbox, วงกลม, เส้นแบ่ง, ระบายสีตามสถานะ และยัง return รายชื่อที่ตัน
+       ถ้า save_rois=True จะบันทึก ROI ลงโฟลเดอร์ roi/
+    """
     img, boxes, quad_statuses = _analyze_nozzles(
         image_path, weights_path, imgsz=imgsz, conf=conf, iou=iou, pad_ratio=pad_ratio
     )
 
     vis = img.copy()
-    green = (60,200,60)  # ไม่ตัน
-    red   = (0,0,255)    # ตัน
+    green = (60,200,60)
+    red   = (0,0,255)
     cyan  = (255,200,0)
     yellow= (0,220,255)
     white = (255,255,255)
 
     blocked_names: List[str] = []
+
+    # เตรียมโฟลเดอร์ ROI
+    roi_root = os.path.join("roi", os.path.splitext(os.path.basename(image_path))[0])
+    if save_rois:
+        os.makedirs(roi_root, exist_ok=True)
 
     for box, statuses in zip(boxes, quad_statuses):
         x1, y1, x2, y2 = map(int, (box.x1, box.y1, box.x2, box.y2))
@@ -217,7 +226,7 @@ def developerTest(
         cv2.rectangle(vis, (x1,y1), (x2,y2), cyan, 2)
         cv2.putText(vis, f"#{nozzle_num}", (x1, max(0,y1-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cyan, 2, cv2.LINE_AA)
 
-        # วงกลม (ใช้ cx,cy,R ถ้ามี; ไม่งั้นประมาณ)
+        # วงกลม
         w = x2 - x1; h = y2 - y1
         cx = int((x1 + x2)/2) if box.cx is None else int(box.cx)
         cy = int((y1 + y2)/2) if box.cy is None else int(box.cy)
@@ -225,7 +234,6 @@ def developerTest(
         R  = max(8, R)
         cv2.circle(vis, (cx,cy), R, yellow, 2)
 
-        # กรอบล้อมวงกลม + เส้นแบ่ง (เพื่อมองภาพรวมง่าย)
         pr = int(R * pad_ratio); r_pad = R + pr
         sx, sy = max(0, cx-r_pad), max(0, cy-r_pad)
         ex, ey = min(vis.shape[1], cx+r_pad), min(vis.shape[0], cy+r_pad)
@@ -234,54 +242,85 @@ def developerTest(
         cv2.line(vis, (mx,sy), (mx,ey), white, 1)
         cv2.line(vis, (sx,my), (ex,my), white, 1)
 
-        # ระบายสีตามสถานะ (ผลคำนวนมาจาก "วงกลม" แล้ว)
-        _blend_rect(vis, sx, sy, mx, my, red if statuses[0] else green)  # TL
-        _blend_rect(vis, mx, sy, ex, my, red if statuses[1] else green)  # TR
-        _blend_rect(vis, sx, my, mx, ey, red if statuses[2] else green)  # BL
-        _blend_rect(vis, mx, my, ex, ey, red if statuses[3] else green)  # BR
+        # ตัด ROI แต่ละ quadrant + เซฟถ้าต้องการ
+        quads = [
+            img[sy:my, sx:mx],  # TL
+            img[sy:my, mx:ex],  # TR
+            img[my:ey, sx:mx],  # BL
+            img[my:ey, mx:ex],  # BR
+        ]
+        if save_rois:
+            for q_idx, q in enumerate(quads):
+                q_name = f"nozzle{nozzle_num}_{_QUAD_NAMES[q_idx]}.png"
+                cv2.imwrite(os.path.join(roi_root, q_name), q)
 
-        # สร้างรายชื่อที่ตัน (เหมือนตัวหลักทุกประการ)
+        # ระบายสีผลลัพธ์
+        _blend_rect(vis, sx, sy, mx, my, red if statuses[0] else green)
+        _blend_rect(vis, mx, sy, ex, my, red if statuses[1] else green)
+        _blend_rect(vis, sx, my, mx, ey, red if statuses[2] else green)
+        _blend_rect(vis, mx, my, ex, ey, red if statuses[3] else green)
+
+        # เก็บรายชื่อรูตัน
         for q_idx, is_blocked in enumerate(statuses):
             if is_blocked:
                 blocked_names.append(f"nozzle{nozzle_num}{_QUAD_NAMES[q_idx]}")
 
+    # เซฟภาพรวมถ้าต้องการ
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         cv2.imwrite(save_path, vis)
     if show:
-        vis_show = _resize_for_display(vis, max_w=1600, max_h=900)  # ย่อให้พอดีหน้าจอ
+        vis_show = _resize_for_display(vis, max_w=1000, max_h=900)
         cv2.imshow("developerTest", vis_show)
         cv2.waitKey(wait_ms)
 
     return blocked_names
 
 
+
 # ===== ตัวอย่างการใช้งานจาก main (เรียก developerTest แทน detect_blocked_nozzles) =====
 if __name__ == "__main__":
     import glob, os
 
-    weights = r"C:\Users\iarah\KinseiProject\AllFinalProduct\BlockedNozzleScanByPhoneALL\nozzleDetectionModel\best.pt"
-    folder  = r"C:\Users\iarah\KinseiProject\AllFinalProduct\BlockedNozzleScanByPhoneALL\pictures"  # โฟลเดอร์ภาพ
-    # save_dir = "out"  # โฟลเดอร์เซฟผล annotate
+    weights = r"C:\Project\nozzleScan\NozzleCleanerProject\best.pt"
+    folder  = r"C:\Project\nozzleScan\NozzleCleanerProject\pictures"
 
-    # เอาไฟล์ที่เป็นนามสกุลรูป
     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
     pictures = [f for f in glob.glob(os.path.join(folder, "*")) if f.lower().endswith(exts)]
-    pictures.sort()  # เรียงชื่อไฟล์
+    pictures.sort()
+    if not pictures:
+        print("No images found."); raise SystemExit(0)
 
     try:
-        for pic in pictures:
+        idx = 0
+        while True:
+            pic = pictures[idx]
             fname = os.path.basename(pic)
-            # save_path = os.path.join(save_dir, fname)
 
-            result = developerTest(
+            # แสดงภาพ + วาดผล (ปล่อยให้ฟังก์ชันโชว์ภาพ แล้วคืนเร็ว)
+            _ = developerTest(
                 pic, weights,
                 imgsz=1280, conf=0.25, iou=0.5, pad_ratio=0.05,
-                show=True, wait_ms=0,          # กดปุ่มใดๆ เพื่อดูภาพต่อไป
-                # save_path=save_path            # เซฟภาพ annotate ทีละไฟล์
+                show=True, wait_ms=1,   # <<< สำคัญ: ไม่ block รอคีย์ในฟังก์ชัน
+                save_rois=False
             )
-            print(f"{fname} -> {result}")       # ตอนนี้คาดว่า []
+            print(f"[{idx+1}/{len(pictures)}] {fname}")
+
+            # รอคีย์ที่นี่แทน เพื่อควบคุมการเลื่อนรูป
+            k = cv2.waitKey(0) & 0xFF
+            if k in (ord('q'), ord('Q'), 27):   # Q หรือ ESC -> ออก
+                break
+            elif k in (ord('d'), ord('D')):     # D -> รูปถัดไป
+                idx = (idx + 1) % len(pictures)
+            elif k in (ord('a'), ord('A')):     # A -> รูปก่อนหน้า
+                idx = (idx - 1) % len(pictures)
+            else:
+                # คีย์อื่น ๆ: ไม่ทำอะไร แสดงรูปเดิม
+                pass
+
     except InvalidInputImageError as e:
         print("Invalid image:", e)
     except FileNotFoundError as e:
         print(e)
+    finally:
+        cv2.destroyAllWindows()
