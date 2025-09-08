@@ -1,0 +1,329 @@
+import cv2
+import numpy as np
+import os
+import sys
+import math
+from dataclasses import dataclass
+from typing import Tuple, Dict, List
+
+# Placeholder classes and functions for a runnable example
+class NozzleDetector:
+    def __init__(self, weights_path: str, imgsz: int, conf: float, iou: float):
+        print(f"Initializing NozzleDetector with weights: {weights_path}")
+        self.weights_path = weights_path
+        self.imgsz = imgsz
+        self.conf = conf
+        self.iou = iou
+
+    def detect_16(self, img: np.ndarray) -> List:
+        # This is a placeholder for actual detection logic.
+        # It returns a fixed list of bounding boxes for demonstration.
+        h, w, _ = img.shape
+        center_x, center_y = w // 2, h // 2
+        boxes = [
+            (center_x - 50, center_y - 50, center_x + 50, center_y + 50),
+            (center_x + 50, center_y - 50, center_x + 100, center_y),
+            # Add more boxes as needed for a complete example
+        ]
+        print(f"Simulating detection and returning {len(boxes)} bounding boxes.")
+        return boxes
+
+def _crop_circle_quadrants(img: np.ndarray, box: Tuple[int, int, int, int], pad_ratio: float):
+    # This is a placeholder for actual cropping logic.
+    # It returns dummy ROIs and a boolean.
+    x1, y1, x2, y2 = box
+    roi = img[y1:y2, x1:x2]
+    h, w, _ = roi.shape
+    
+    # Create some dummy ROIs for demonstration
+    quads = [
+        roi[0:h//2, 0:w//2],  # TL
+        roi[0:h//2, w//2:w],  # TR
+        roi[h//2:h, 0:w//2],  # BL
+        roi[h/2:h, w//2:w],  # BR
+    ]
+    return quads, True
+
+
+# --- End of placeholders ---
+
+def _preprocess_roi(roi_image, size=(100, 100)):
+    """
+    Resizes the ROI image to a consistent size.
+    
+    Args:
+        roi_image (np.ndarray): The region of interest (ROI) image.
+        size (tuple): The target size for the image (width, height).
+        
+    Returns:
+        np.ndarray: The resized ROI image.
+    """
+    if roi_image is None or roi_image.size == 0:
+        return np.zeros((size[1], size[0], 3), dtype=np.uint8)
+    
+    return cv2.resize(roi_image, size, interpolation=cv2.INTER_AREA)
+
+def _find_hole_contour(roi_image):
+    """
+    Finds and filters contours to identify the primary hole.
+    
+    Args:
+        roi_image (np.ndarray): The region of interest (ROI) image.
+    
+    Returns:
+        np.ndarray or None: The largest filtered contour, or None if not found.
+    """
+    gray = cv2.cvtColor(roi_image, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY_INV, 39, 0)
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    
+    min_area = 250
+    max_area = 450
+    
+    filtered_contours = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area or area > max_area:
+            continue
+        
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect_ratio = float(w) / h
+        if aspect_ratio < 0.7 or aspect_ratio > 1.4:
+            continue
+        
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter == 0:
+            continue
+        circularity = 4 * np.pi * area / (perimeter ** 2)
+        if circularity < 0.5:
+            continue
+            
+        filtered_contours.append(contour)
+        
+    if not filtered_contours:
+        return None
+    
+    # Return the largest contour as the most likely hole
+    largest_contour = max(filtered_contours, key=cv2.contourArea)
+    return largest_contour
+
+def _refine_roi_center_within_contour(roi_bgr: np.ndarray, contour: np.ndarray, max_shift: int = 8):
+    """
+    Refines the center of a hole by searching for a point that is 'dark + has sharp edges'
+    within a given contour area.
+    
+    Args:
+        roi_bgr (np.ndarray): The ROI image.
+        contour (np.ndarray): The contour of the hole.
+        max_shift (int): Maximum pixel shift from the contour's centroid.
+        
+    Returns:
+        tuple: The refined x,y coordinates of the hole's center.
+    """
+    gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    
+    # Get the centroid of the contour as the initial center
+    M = cv2.moments(contour)
+    if M["m00"] == 0:
+        return (0, 0)
+    cx = int(M["m10"] / M["m00"])
+    cy = int(M["m01"] / M["m00"])
+
+    best_score = -1e9
+    best_xy = (cx, cy)
+    
+    # Corrected function name from cv2.Sobbel to cv2.Sobel
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.hypot(gx, gy)
+    
+    patch_r = 14
+    for dy in range(-max_shift, max_shift + 1):
+        for dx in range(-max_shift, max_shift + 1):
+            x = np.clip(cx + dx, 0, roi_bgr.shape[1] - 1)
+            y = np.clip(cy + dy, 0, roi_bgr.shape[0] - 1)
+
+            # Check if the point is inside the contour
+            if cv2.pointPolygonTest(contour, (float(x), float(y)), False) < 0:
+                continue
+
+            y1, y2 = max(0, y - patch_r), min(roi_bgr.shape[0], y + patch_r)
+            x1, x2 = max(0, x - patch_r), min(roi_bgr.shape[1], x + patch_r)
+
+            patch = gray[y1:y2, x1:x2]
+            if patch.size == 0:
+                continue
+
+            dark = 255.0 - float(np.mean(patch))
+            edge = float(np.mean(mag[y1:y2, x1:x2]))
+            score = dark + 0.5 * edge
+
+            if score > best_score:
+                best_score = score
+                best_xy = (int(x), int(y))
+    return best_xy
+
+def _make_masks(H: int, W: int, cx: int, cy: int, r_in: int):
+    """
+    Creates a circular mask for a given center and radius.
+    
+    Args:
+        H (int): Height of the image.
+        W (int): Width of the image.
+        cx (int): Center x-coordinate.
+        cy (int): Center y-coordinate.
+        r_in (int): Inner radius of the circle.
+        
+    Returns:
+        np.ndarray: The circular mask.
+    """
+    mask_in = np.zeros((H, W), np.uint8)
+    cv2.circle(mask_in, (cx, cy), r_in, 255, -1)
+    return mask_in
+
+def isBlockedHole(roi_image):
+    """
+    Checks if a hole is blocked using a combination of darkness and texture analysis.
+    
+    Args:
+        roi_image (np.ndarray): The region of interest (ROI) image of a single hole.
+        
+    Returns:
+        tuple: A tuple containing:
+               - bool: True if the hole is blocked, False otherwise.
+               - output_image (np.ndarray): The image with status drawn.
+    """
+    preprocessed_image = _preprocess_roi(roi_image)
+    result_image = preprocessed_image.copy()
+
+    # 1. Find the hole contour first
+    hole_contour = _find_hole_contour(preprocessed_image)
+
+    if hole_contour is None:
+        # If no hole is found, assume it is blocked
+        cv2.putText(result_image, "No Hole Found", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2, cv2.LINE_AA)
+        return True, result_image
+
+    # 2. Refine the center of the found contour
+    cx, cy = _refine_roi_center_within_contour(preprocessed_image, hole_contour)
+
+    # Use a hardcoded radius for the analysis mask for now
+    r_in = 12
+    
+    # 3. Create a circular mask at the refined center
+    mask = _make_masks(preprocessed_image.shape[0], preprocessed_image.shape[1], cx, cy, r_in)
+    
+    gray_image = cv2.cvtColor(preprocessed_image, cv2.COLOR_BGR2GRAY)
+    
+    # Analyze Darkness
+    mean_intensity = cv2.mean(gray_image, mask=mask)[0]
+    
+    # Analyze Texture (flatness) using variance of Laplacian
+    laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)
+    texture_variance = np.var(laplacian, where=(mask > 0))
+    
+    # Define thresholds
+    darkness_threshold = 60 # Lower value means darker
+    texture_threshold = 100 # Higher value means more texture
+
+    is_blocked = (mean_intensity > darkness_threshold) or (texture_variance < texture_threshold)
+    
+    # Draw status on the image
+    status_text = "Blocked" if is_blocked else "Not Blocked"
+    color = (0, 0, 255) if is_blocked else (0, 255, 0)
+    
+    # Draw a circle on the image to show the analyzed area
+    cv2.circle(result_image, (cx, cy), r_in, color, 2)
+    cv2.putText(result_image, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+    
+    return is_blocked, result_image
+
+def _analyze_nozzles(
+    image_path: str,
+    weights_path: str,
+    *,
+    imgsz: int,
+    conf: float,
+    iou: float,
+    pad_ratio: float,
+):
+    """
+    Read image → detect_16 → build 'circular' ROIs → return (img, boxes, quad_statuses)
+    quad_statuses: List[List[bool]] with the same length as `boxes`,
+                   each item is [TL, TR, BL, BR] booleans.
+    """
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Image not found: {image_path}")
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Failed to read image: {image_path}")
+
+    det = NozzleDetector(weights_path, imgsz=imgsz, conf=conf, iou=iou)
+    boxes = det.detect_16(img)
+
+    quad_statuses: List[List[bool]] = []
+    for box in boxes:
+        quads, _ = _crop_circle_quadrants(img, box, pad_ratio=pad_ratio)
+        statuses = []
+        for roi in quads:
+            try:
+                is_blocked, _ = isBlockedHole(roi)
+                statuses.append(is_blocked)
+            except Exception as e:
+                print(f"Error processing ROI: {e}")
+                statuses.append(False)
+        quad_statuses.append(statuses)
+    return img, boxes, quad_statuses
+
+def main():
+    """
+    Main function to load images from a folder and test the isBlockedHole function.
+    Press 'a' or 'd' to cycle through images, 'q' to quit.
+    """
+    folder_path = r'C:\Project\nozzleScan\NozzleCleanerProject\roi\1'
+    if not os.path.isdir(folder_path):
+        print(f"Error: The folder '{folder_path}' does not exist.")
+        sys.exit()
+
+    image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    if not image_files:
+        print(f"Error: No image files found in '{folder_path}'.")
+        sys.exit()
+
+    current_index = 0
+    while True:
+        file_path = os.path.join(folder_path, image_files[current_index])
+        
+        # Read the image
+        roi = cv2.imread(file_path)
+        if roi is None:
+            print(f"Warning: Failed to read image '{file_path}'. Skipping.")
+            current_index = (current_index + 1) % len(image_files)
+            continue
+
+        # Get the result from the isBlockedHole function
+        is_blocked, result_image = isBlockedHole(roi)
+
+        # Display the result
+        display_text = f"{current_index + 1} of {len(image_files)}"
+        cv2.putText(result_image, display_text, (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+        
+        # Move the windows to prevent them from overlapping
+        cv2.imshow("Result", result_image)
+        cv2.moveWindow("Result", 200, 200)
+
+        # Handle user input
+        key = cv2.waitKey(0) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('a'):
+            current_index = (current_index - 1 + len(image_files)) % len(image_files)
+        elif key == ord('d'):
+            current_index = (current_index + 1) % len(image_files)
+            
+    cv2.destroyAllWindows()
+    
+if __name__ == "__main__":
+    main()

@@ -7,7 +7,7 @@ picture = BASE_DIR / "pictures" / "1.jpg"
 
 def main():
     try:
-        blocked_list = detect_blocked_nozzles(str(picture), str(weights))
+        blocked_list = detect_blocked_nozzles(str(picture))
         if blocked_list:
             print("Blocked nozzles detected:", blocked_list)
         else:
