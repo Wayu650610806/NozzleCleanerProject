@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+
 # ===== Configuration =====
 _AI_IMGSZ: int = 64
 _AI_BLOCKED_CLASS_INDEX: int = 1
