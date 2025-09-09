@@ -22,6 +22,7 @@ import os
 from typing import Optional, Iterable, List
 import cv2
 import numpy as np
+from pathlib import Path
 
 # ===== Configuration =====
 _AI_IMGSZ: int = 64
@@ -70,16 +71,26 @@ def _load_model(weights_path: str) -> None:
 # ============================
 def isBlockedHole(
     roi_bgr: np.ndarray,
-    weights_path: str = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt",
+    weights_path: str = None,
     p_block_thresh: float = 0.6
 ) -> bool:
+    # หาตำแหน่งโฟลเดอร์ไฟล์ปัจจุบัน
+    CURRENT_DIR = Path(__file__).resolve().parent
+
+    # bestBlockV1.pt อยู่โฟลเดอร์เดียวกับไฟล์นี้
+    weights_path = CURRENT_DIR / "bestBlockV1.pt"
+
+    # ถ้าจะให้ชัวร์ก่อนโหลด
+    if not weights_path.is_file():
+        raise FileNotFoundError(f"ไม่พบไฟล์โมเดล: {weights_path}")
+    
     p_block = predict_block_prob(roi_bgr, weights_path=weights_path)
     return p_block >= p_block_thresh
 
 
 def predict_block_prob(
     roi_bgr: np.ndarray,
-    weights_path: str = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt"
+    weights_path: str = None
 ) -> float:
     global _AI_MODEL
     if _AI_MODEL is None:
