@@ -112,95 +112,95 @@ def predict_block_prob(
 # =========================
 # === Developer viewer  ===
 # =========================
-def _list_images(folder: str, exts: Iterable[str]) -> List[str]:
-    exts = tuple([e.lower() for e in exts])
-    return sorted([os.path.join(folder, f) for f in os.listdir(folder)
-                   if os.path.isfile(os.path.join(folder, f)) and f.lower().endswith(exts)])
+# def _list_images(folder: str, exts: Iterable[str]) -> List[str]:
+#     exts = tuple([e.lower() for e in exts])
+#     return sorted([os.path.join(folder, f) for f in os.listdir(folder)
+#                    if os.path.isfile(os.path.join(folder, f)) and f.lower().endswith(exts)])
 
-# --- add this helper near the top (with other helpers) ---
-def _status_canvas(is_blocked: bool, p_block: float,
-                   size: tuple[int,int]=(220, 70)) -> np.ndarray:
-    """Create a small status image to show in a separate window."""
-    w, h = size
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)          # black background
-    status = "BLOCKED" if is_blocked else "CLEAR"
-    color  = (0, 0, 255) if is_blocked else (60, 200, 60) # red / green
+# # --- add this helper near the top (with other helpers) ---
+# def _status_canvas(is_blocked: bool, p_block: float,
+#                    size: tuple[int,int]=(220, 70)) -> np.ndarray:
+#     """Create a small status image to show in a separate window."""
+#     w, h = size
+#     canvas = np.zeros((h, w, 3), dtype=np.uint8)          # black background
+#     status = "BLOCKED" if is_blocked else "CLEAR"
+#     color  = (0, 0, 255) if is_blocked else (60, 200, 60) # red / green
 
-    # title
-    cv2.putText(canvas, status, (10, 26),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
-    # prob
-    cv2.putText(canvas, f"p={p_block:.3f}", (10, 54),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
-    return canvas
+#     # title
+#     cv2.putText(canvas, status, (10, 26),
+#                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+#     # prob
+#     cv2.putText(canvas, f"p={p_block:.3f}", (10, 54),
+#                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+#     return canvas
 
-def developer_view_folder(
-    folder: str,
-    *,
-    weights_path: str = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt",
-    p_block_thresh: float = 0.6,
-    exts: Iterable[str] = (".png", ".jpg", ".jpeg", ".bmp", ".webp"),
-    window_name: str = "holecheckAI: developer_view_folder",
-    wait_ms_first: int = 1
-) -> None:
-    if not os.path.isdir(folder):
-        raise FileNotFoundError(f"Folder not found: {folder}")
+# def developer_view_folder(
+#     folder: str,
+#     *,
+#     weights_path: str = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt",
+#     p_block_thresh: float = 0.6,
+#     exts: Iterable[str] = (".png", ".jpg", ".jpeg", ".bmp", ".webp"),
+#     window_name: str = "holecheckAI: developer_view_folder",
+#     wait_ms_first: int = 1
+# ) -> None:
+#     if not os.path.isdir(folder):
+#         raise FileNotFoundError(f"Folder not found: {folder}")
 
-    files = _list_images(folder, exts)
-    if not files:
-        print("No images found in folder.")
-        return
+#     files = _list_images(folder, exts)
+#     if not files:
+#         print("No images found in folder.")
+#         return
 
-    idx = 0
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+#     idx = 0
+#     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    try:
-        while True:
-            path = files[idx]
-            img = cv2.imread(path)
-            if img is None:
-                idx = (idx + 1) % len(files)
-                continue
+#     try:
+#         while True:
+#             path = files[idx]
+#             img = cv2.imread(path)
+#             if img is None:
+#                 idx = (idx + 1) % len(files)
+#                 continue
 
-            p_block = predict_block_prob(img, weights_path=weights_path)
-            is_blocked = p_block >= p_block_thresh
-
-
-            # --- show main image (original size, no overlay) ---
-            vis = img  # no resize
-            cv2.imshow(window_name, vis)
-
-            # --- show status in a separate small window ---
-            status_img = _status_canvas(is_blocked, p_block, size=(220, 70))
-            status_win = f"{window_name} [status]"
-            cv2.imshow(status_win, status_img)
-
-            # (optional) place the status window near the main window
-            try:
-                cv2.moveWindow(status_win, 50, 50)
-            except Exception:
-                pass
+#             p_block = predict_block_prob(img, weights_path=weights_path)
+#             is_blocked = p_block >= p_block_thresh
 
 
+#             # --- show main image (original size, no overlay) ---
+#             vis = img  # no resize
+#             cv2.imshow(window_name, vis)
+
+#             # --- show status in a separate small window ---
+#             status_img = _status_canvas(is_blocked, p_block, size=(220, 70))
+#             status_win = f"{window_name} [status]"
+#             cv2.imshow(status_win, status_img)
+
+#             # (optional) place the status window near the main window
+#             try:
+#                 cv2.moveWindow(status_win, 50, 50)
+#             except Exception:
+#                 pass
 
 
-            k = cv2.waitKey(wait_ms_first if wait_ms_first is not None else 0) & 0xFF
-            wait_ms_first = None
-            if k in (ord('q'), ord('Q'), 27):
-                break
-            elif k in (ord('d'), ord('D')):
-                idx = (idx + 1) % len(files)
-            elif k in (ord('a'), ord('A')):
-                idx = (idx - 1) % len(files)
-
-    finally:
-        cv2.destroyWindow(window_name)
 
 
-# =================
-# === Main run  ===
-# =================
-if __name__ == "__main__":
-    folder = r"C:\Project\nozzleScan\NozzleCleanerProject\pictures\roi\1"
-    weights = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt"
-    developer_view_folder(folder, weights_path=weights, p_block_thresh=0.6)
+#             k = cv2.waitKey(wait_ms_first if wait_ms_first is not None else 0) & 0xFF
+#             wait_ms_first = None
+#             if k in (ord('q'), ord('Q'), 27):
+#                 break
+#             elif k in (ord('d'), ord('D')):
+#                 idx = (idx + 1) % len(files)
+#             elif k in (ord('a'), ord('A')):
+#                 idx = (idx - 1) % len(files)
+
+#     finally:
+#         cv2.destroyWindow(window_name)
+
+
+# # =================
+# # === Main run  ===
+# # =================
+# if __name__ == "__main__":
+#     folder = r"C:\Project\nozzleScan\pictures\roi\1"
+#     weights = r"C:\Project\nozzleScan\NozzleCleanerProject\bestBlockV1.pt"
+#     developer_view_folder(folder, weights_path=weights, p_block_thresh=0.6)
