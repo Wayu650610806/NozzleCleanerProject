@@ -410,45 +410,45 @@ def developerTest(
 # === CLI EXAMPLE (optional) ==
 # ============================
 
-if __name__ == "__main__":
-    folder = r"C:\Project\nozzleScan\NozzleCleanerProject\pictures"
-    outdir = None  # set to a folder to dump raw quadrant ROIs per image
-    exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+# if __name__ == "__main__":
+#     folder = r"C:\Project\nozzleScan\pictures"
+#     outdir = None  # set to a folder to dump raw quadrant ROIs per image
+#     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
-    pictures = [f for f in glob.glob(os.path.join(folder, "*")) if f.lower().endswith(exts)]
-    pictures.sort()
-    if not pictures:
-        print("No images found.")
-        raise SystemExit(0)
+#     pictures = [f for f in glob.glob(os.path.join(folder, "*")) if f.lower().endswith(exts)]
+#     pictures.sort()
+#     if not pictures:
+#         print("No images found.")
+#         raise SystemExit(0)
 
-    try:
-        idx = 0
-        while True:
-            pic = pictures[idx]
-            fname = os.path.basename(pic)
+#     try:
+#         idx = 0
+#         while True:
+#             pic = pictures[idx]
+#             fname = os.path.basename(pic)
 
-            _ = developerTest(
-                pic, weights_path=None,  # auto-find best.pt
-                imgsz=1280, conf=0.25, iou=0.5, pad_ratio=0.05,
-                show=True, wait_ms=1,
-                save_path=None,          # e.g., "out/out.jpg"
-                save_rois_dir=outdir
-            )
-            print(f"[{idx+1}/{len(pictures)}] {fname}")
+#             _ = developerTest(
+#                 pic, weights_path=None,  # auto-find best.pt
+#                 imgsz=1280, conf=0.25, iou=0.5, pad_ratio=0.05,
+#                 show=True, wait_ms=1,
+#                 save_path=None,          # e.g., "out/out.jpg"
+#                 save_rois_dir=outdir
+#             )
+#             print(f"[{idx+1}/{len(pictures)}] {fname}")
 
-            k = cv2.waitKey(0) & 0xFF
-            if k in (ord('q'), ord('Q'), 27):   # Q or ESC → exit
-                break
-            elif k in (ord('d'), ord('D')):     # D → next image
-                idx = (idx + 1) % len(pictures)
-            elif k in (ord('a'), ord('A')):     # A → previous image
-                idx = (idx - 1) % len(pictures)
-            else:
-                pass
+#             k = cv2.waitKey(0) & 0xFF
+#             if k in (ord('q'), ord('Q'), 27):   # Q or ESC → exit
+#                 break
+#             elif k in (ord('d'), ord('D')):     # D → next image
+#                 idx = (idx + 1) % len(pictures)
+#             elif k in (ord('a'), ord('A')):     # A → previous image
+#                 idx = (idx - 1) % len(pictures)
+#             else:
+#                 pass
 
-    except InvalidInputImageError as e:
-        print("Invalid image:", e)
-    except FileNotFoundError as e:
-        print(e)
-    finally:
-        cv2.destroyAllWindows()
+#     except InvalidInputImageError as e:
+#         print("Invalid image:", e)
+#     except FileNotFoundError as e:
+#         print(e)
+#     finally:
+#         cv2.destroyAllWindows()

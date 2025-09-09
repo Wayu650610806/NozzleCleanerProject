@@ -2,8 +2,8 @@ from pathlib import Path
 from blocked_orchestrator import detect_blocked_nozzles, InvalidInputImageError
 
 BASE_DIR = Path(__file__).parent
-picture = BASE_DIR / "pictures" / "1.jpg"
-
+# picture = BASE_DIR / "pictures" / "1.jpg"
+picture = r"C:\Project\nozzleScan\pictures\1.jpg"
 def main():
     try:
         blocked_list = detect_blocked_nozzles(str(picture))
