@@ -56,6 +56,7 @@ import numpy as np
 from detector import NozzleDetector, InvalidInputImageError
 from holecheckAI import isBlockedHole
 from nozzle_types import NozzleBox
+from rotatePicture import auto_rotate_by_aruco
 
 
 # =========================
@@ -220,6 +221,10 @@ def _analyze_nozzles(
     if img is None:
         raise FileNotFoundError(f"Failed to read image: {image_path}")
 
+    #rotate camera
+    img_rot, rot_angle = auto_rotate_by_aruco(img, prefer_id=None, upscale=1.3)
+    img = img_rot
+
     det = NozzleDetector(weights_path, imgsz=imgsz, conf=conf, iou=iou)
     boxes = det.detect_16(img)  # may raise InvalidInputImageError
 
@@ -261,40 +266,40 @@ def _analyze_nozzles(
 # === MAIN (PUBLIC  API)  ===
 # ===========================
 
-def detect_blocked_nozzles(
-    image_path: str,
-    *,
-    imgsz: int = 1280,
-    conf: float = 0.25,
-    iou: float = 0.5,
-    pad_ratio: float = 0.05,
-    save_rois_dir: str | None = None,
-) -> List[str]:
-    """
-    User-facing API: build circular ROIs and return blocked labels, e.g. ["nozzle1TopLeft", ...]
-    - Automatically finds 'best.pt' near the code/image/CWD if weights_path is not provided.
-    - If save_rois_dir is set, dumps the exact masked quadrant patches used by isBlockedHole.
-    """
-    weights_path = _auto_find_weights(image_path)
+# def detect_blocked_nozzles(
+#     image_path: str,
+#     *,
+#     imgsz: int = 1280,
+#     conf: float = 0.25,
+#     iou: float = 0.5,
+#     pad_ratio: float = 0.05,
+#     save_rois_dir: str | None = None,
+# ) -> List[str]:
+#     """
+#     User-facing API: build circular ROIs and return blocked labels, e.g. ["nozzle1TopLeft", ...]
+#     - Automatically finds 'best.pt' near the code/image/CWD if weights_path is not provided.
+#     - If save_rois_dir is set, dumps the exact masked quadrant patches used by isBlockedHole.
+#     """
+#     weights_path = _auto_find_weights(image_path)
 
-    _, boxes, quad_statuses = _analyze_nozzles(
-        image_path, weights_path,
-        imgsz=imgsz, conf=conf, iou=iou, pad_ratio=pad_ratio,
-        save_rois_dir=save_rois_dir
-    )
+#     _, boxes, quad_statuses = _analyze_nozzles(
+#         image_path, weights_path,
+#         imgsz=imgsz, conf=conf, iou=iou, pad_ratio=pad_ratio,
+#         save_rois_dir=save_rois_dir
+#     )
 
-    blocked_names: List[str] = []
-    for box, statuses in zip(boxes, quad_statuses):
-        nozzle_num = int(box.grid_index) + 1 if box.grid_index is not None else 0
-        for q_idx, is_blocked in enumerate(statuses):
-            if bool(is_blocked):
-                blocked_names.append(f"nozzle{nozzle_num}{_QUAD_NAMES[q_idx]}")
-    return blocked_names
+#     blocked_names: List[str] = []
+#     for box, statuses in zip(boxes, quad_statuses):
+#         nozzle_num = int(box.grid_index) + 1 if box.grid_index is not None else 0
+#         for q_idx, is_blocked in enumerate(statuses):
+#             if bool(is_blocked):
+#                 blocked_names.append(f"nozzle{nozzle_num}{_QUAD_NAMES[q_idx]}")
+#     return blocked_names
 
 
-# ================================
-# === DEVELOPER / VISUAL UTILS ===
-# ================================
+# # ================================
+# # === DEVELOPER / VISUAL UTILS ===
+# # ================================
 
 # def _resize_for_display(img: np.ndarray, max_w: int = 1600, max_h: int = 900) -> np.ndarray:
 #     """Downscale image for display while keeping aspect ratio."""
@@ -411,7 +416,7 @@ def detect_blocked_nozzles(
 # # ============================
 
 # if __name__ == "__main__":
-#     folder = r"C:\Project\nozzleScan\pictures"
+#     folder = r"C:\Project\nozzleScan\pictures\direction"
 #     outdir = None  # set to a folder to dump raw quadrant ROIs per image
 #     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
