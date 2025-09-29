@@ -73,7 +73,7 @@ def _ensure_dir(p: str) -> None:
         os.makedirs(p, exist_ok=True)
 
 
-def _auto_find_weights(image_path: str, filename: str = "bestNozzleV1.pt") -> str:
+def _auto_find_weights(image_path: str, filename: str = "bestNozzleV8.pt") -> str:
     """
     Find 'best.pt' automatically in priority order:
         1) Folder of this Python module
@@ -210,6 +210,7 @@ def _analyze_nozzles(
     iou: float,
     pad_ratio: float,
     save_rois_dir: str | None = None,
+    modelClassifyname : str = "bestBlockV8.pt"
 ) -> Tuple[np.ndarray, List[NozzleBox], List[List[bool]]]:
     """
     Read image → YOLO.detect_16 → build circular 4-quadrant ROIs →
@@ -248,7 +249,7 @@ def _analyze_nozzles(
         for roi in quads:
             try:
                 # If `isBlockedHole` returns bool directly
-                statuses.append(bool(isBlockedHole(roi)))
+                statuses.append(bool(isBlockedHole(roi,modelName = modelClassifyname)))
 
                 # If your implementation returns (is_blocked, info), switch to:
                 # is_blocked, _ = isBlockedHole(roi)
@@ -274,18 +275,21 @@ def detect_blocked_nozzles(
     iou: float = 0.5,
     pad_ratio: float = 0.05,
     save_rois_dir: str | None = None,
+    detectionModel : str = "bestNozzleV8.pt",
+    classifyModel : str = "bestBlockV8.pt"
 ) -> List[str]:
     """
     User-facing API: build circular ROIs and return blocked labels, e.g. ["nozzle1TopLeft", ...]
     - Automatically finds 'best.pt' near the code/image/CWD if weights_path is not provided.
     - If save_rois_dir is set, dumps the exact masked quadrant patches used by isBlockedHole.
     """
-    weights_path = _auto_find_weights(image_path)
+    weights_path = _auto_find_weights(image_path = image_path,filename = detectionModel)
 
     _, boxes, quad_statuses = _analyze_nozzles(
         image_path, weights_path,
         imgsz=imgsz, conf=conf, iou=iou, pad_ratio=pad_ratio,
-        save_rois_dir=save_rois_dir
+        save_rois_dir=save_rois_dir,
+        modelClassifyname = classifyModel
     )
 
     blocked_names: List[str] = []
