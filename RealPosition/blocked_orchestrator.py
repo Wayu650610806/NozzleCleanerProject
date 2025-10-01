@@ -56,7 +56,7 @@ import numpy as np
 from detector import NozzleDetector, InvalidInputImageError
 from holecheckAI import isBlockedHole
 from nozzle_types import NozzleBox
-from rotatePicture import auto_rotate_by_aruco
+from FixPosition.rotatePicture import auto_rotate_by_aruco
 
 
 # =========================
