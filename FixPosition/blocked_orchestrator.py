@@ -56,7 +56,7 @@ import numpy as np
 from detector import NozzleDetector, InvalidInputImageError
 from holecheckAI import isBlockedHole
 from nozzle_types import NozzleBox
-from FixPosition.rotatePicture import auto_rotate_by_aruco
+from wrotatePicture import auto_rotate_by_aruco
 
 
 # =========================
@@ -292,13 +292,24 @@ def detect_blocked_nozzles(
         modelClassifyname = classifyModel
     )
 
+    def _remap_nozzle_num(n: int) -> int:
+        # 5→8, 6→7, 7→6, 8→5
+        if 5 <= n <= 8:
+            return 13 - n
+        # 13→16, 14→15, 15→14, 16→13
+        if 13 <= n <= 16:
+            return 29 - n
+        return n
+
     blocked_names: List[str] = []
     for box, statuses in zip(boxes, quad_statuses):
         nozzle_num = int(box.grid_index) + 1 if box.grid_index is not None else 0
+        nozzle_num = _remap_nozzle_num(nozzle_num)  # <-- แปลงเลขที่นี่
         for q_idx, is_blocked in enumerate(statuses):
             if bool(is_blocked):
                 blocked_names.append(f"nozzle{nozzle_num}{_QUAD_NAMES[q_idx]}")
     return blocked_names
+
 
 
 # # ================================

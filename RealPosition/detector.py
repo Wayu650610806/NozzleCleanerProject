@@ -46,45 +46,40 @@ class NozzleDetector:
     # ======================
     # === PUBLIC METHOD  ===
     # ======================
-    def detect_16(self, image_bgr: np.ndarray) -> List[NozzleBox]:
+    def detect(self, image_bgr: np.ndarray) -> List[NozzleBox]:
         """
-        Run detection and return exactly 16 row-major boxes with geometry populated.
+        Run detection and return a variable-length list of boxes.
+        No sorting. No grid_index assignment. No 16-enforcement.
         """
-        # 1) First pass with configured confidence
+        # 1) pass แรกตาม conf ปัจจุบัน
         boxes = self._adaptive_detect_once(image_bgr, self.conf)
         boxes = self._filter_by_relative_area(boxes, min_ratio=0.30, max_ratio=3.0)
 
-        # 1.1) Retry once with a slightly lower confidence if fewer than 12 remain
-        if len(boxes) < 12:
+        # 1.1) (ทางเลือก) ลอง soften conf ถ้าเจอน้อยมาก
+        if len(boxes) < 8:
             soften_conf = max(0.16, self.conf - 0.05)
             if soften_conf < self.conf:
                 boxes2 = self._adaptive_detect_once(image_bgr, soften_conf)
-                boxes2 = self._filter_by_relative_area(boxes2, min_ratio=0.30, max_ratio=3.0)  # fixed
+                boxes2 = self._filter_by_relative_area(boxes2, min_ratio=0.30, max_ratio=3.0)
                 if len(boxes2) > len(boxes):
                     boxes = boxes2
 
-        # 2) Guard rail
-        if len(boxes) < 12:
-            raise InvalidInputImageError(
-                f"Detected only {len(boxes)} nozzles. "
-                "Expected a clear 4×4 nozzle grid. Please retake the photo."
-            )
+        if len(boxes) == 0:
+            raise InvalidInputImageError("No nozzles detected. Please retake the photo.")
 
-        # 3) Enforce 16 outputs via grid snapping/filling
-        boxes = self._enforce_16(image_bgr, boxes)
-
-        # 4) Row-major sort + grid_index (0..15)
-        boxes = self._sort_row_major(boxes)
-        for idx, b in enumerate(boxes):
-            b.grid_index = idx
-            # 5) Populate circle geometry from bbox
+        # 2) ไม่เรียก _enforce_16(...)
+        # 3) ไม่ sort, ไม่ตั้ง grid_index
+        # 4) เติม geometry ให้พอใช้งานต่อได้
+        for b in boxes:
             w = b.x2 - b.x1
             h = b.y2 - b.y1
             b.cx = b.x1 + w // 2
             b.cy = b.y1 + h // 2
-            b.R = max(8, int(min(w, h) * 0.4))
+            b.R  = max(8, int(min(w, h) * 0.4))
+            # b.grid_index = None  # ปล่อยว่าง ไม่ต้องตั้ง
 
         return boxes
+
 
     # ======================
     # === HELPER METHODS ===
