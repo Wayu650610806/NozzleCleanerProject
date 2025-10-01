@@ -6,7 +6,7 @@ BASE_DIR = Path(__file__).parent
 picture = r"C:\Project\nozzleScan\pictures\1.jpg"
 def main():
     try:
-        blocked_list = detect_blocked_nozzles(str(picture), detectionModel = "bestNozzleV8.pt" , classifyModel = "bestBlockV12.pt")
+        blocked_list = detect_blocked_nozzles(str(picture), detectionModel = "bestNozzleV8.pt" , classifyModel = "bestBlockV8.pt")
         if blocked_list:
             print("Blocked nozzles detected:", blocked_list)
         else:
