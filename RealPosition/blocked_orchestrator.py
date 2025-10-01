@@ -131,25 +131,35 @@ def _circle_from_box(box: NozzleBox) -> Tuple[int, int, int]:
 
 def _quadrant_centers(
     box: NozzleBox,
-    pad_ratio: float,
+    pad_ratio: float,                  # ไม่ได้ใช้ในโหมด 20mm แต่เก็บไว้เพื่อ backward compat
     mm_per_px: Optional[float] = None,
-    angle_deg: float = 0.0
+    angle_deg: float = 0.0,
+    corner_offset_mm: float = 20.0     # << ระยะจริงจากจุดศูนย์กลางไป "มุม" (หน่วย mm)
 ) -> List[Tuple[int, int]]:
     cx, cy, R = _circle_from_box(box)
-    r = float(R) * (1.0 + float(pad_ratio))
-    d = max(1.0, r * 0.5)
 
+    # --- คำนวณ d ให้ "ระยะจากศูนย์กลางถึงมุม" = corner_offset_mm ---
+    if mm_per_px and mm_per_px > 0:
+        D_px = float(corner_offset_mm) / float(mm_per_px)  # ระยะจริง 20mm → เป็นพิกเซล
+        d = max(1.0, D_px / math.sqrt(2.0))                # d*sqrt(2) = D_px → d = D_px/√2
+    else:
+        # ถ้าไม่มีสเกล ให้ fallback เดิม (อิงขนาด ROI)
+        r = float(R) * (1.0 + float(pad_ratio))
+        d = max(1.0, r * 0.5)
+
+    # แกนเอียง
     th = math.radians(float(angle_deg))
-    ux, uy = math.cos(th), math.sin(th)          # แกน X ของกริด
-    vx, vy = -math.sin(th), math.cos(th)         # แกน Y ของกริด
+    ux, uy = math.cos(th), math.sin(th)
+    vx, vy = -math.sin(th), math.cos(th)
 
-    # TL = (-ux - vx), TR = (+ux - vx), BL = (-ux + vx), BR = (+ux + vx)
+    # TL/TR/BL/BR ที่ "ระยะถึงมุม" = 20mm จริง
     return [
         (int(round(cx - d*ux - d*vx)), int(round(cy - d*uy - d*vy))),  # TL
         (int(round(cx + d*ux - d*vx)), int(round(cy + d*uy - d*vy))),  # TR
         (int(round(cx - d*ux + d*vx)), int(round(cy - d*uy + d*vy))),  # BL
         (int(round(cx + d*ux + d*vx)), int(round(cy + d*uy + d*vy))),  # BR
     ]
+
 
 
 # ===== scale utils =====
@@ -164,36 +174,57 @@ def estimate_scale_from_boxes(
 ) -> Dict[str, Optional[float]]:
     """
     ประมาณสเกลจากระยะห่าง 'เพื่อนบ้านที่ใกล้สุด' ของศูนย์กลาง nozzle
-    คืน dict มี mm_per_px, px_per_mm, ค่าแกน x/y และ anisotropy_pct
+    คืน dict: mm_per_px, px_per_mm, mm_per_px_x, mm_per_px_y, n_pairs_x/y, anisotropy_pct
+    (ไม่มีการคำนวณ/ส่งคืนมุมอีกต่อไป)
     """
     if len(boxes) < 2:
-        return {"mm_per_px": None, "px_per_mm": None,
-                "mm_per_px_x": None, "mm_per_px_y": None,
-                "n_pairs_x": 0, "n_pairs_y": 0,
-                "anisotropy_pct": None}
+        return {
+            "mm_per_px": None, "px_per_mm": None,
+            "mm_per_px_x": None, "mm_per_px_y": None,
+            "n_pairs_x": 0, "n_pairs_y": 0,
+            "anisotropy_pct": None,
+        }
 
     pts = np.array([(float(b.cx), float(b.cy)) for b in boxes], dtype=np.float64)
-    nearest_all, nearest_h, nearest_v = [], [], []
 
-    ang_tol = float(angle_tol_deg)
+    nearest_all: List[float] = []
+    nearest_h:   List[float] = []
+    nearest_v:   List[float] = []
+
     n = len(pts)
+    tol = float(angle_tol_deg)
+
     for i in range(n):
         best_d = float("inf"); best_dx = best_dy = 0.0
         for j in range(n):
-            if i == j: continue
+            if i == j:
+                continue
             dx = pts[j, 0] - pts[i, 0]
             dy = pts[j, 1] - pts[i, 1]
             d  = math.hypot(dx, dy)
             if 1e-6 < d < best_d:
                 best_d, best_dx, best_dy = d, dx, dy
-        if not math.isfinite(best_d): continue
-        nearest_all.append(best_d)
-        a = abs(math.degrees(math.atan2(best_dy, best_dx)))  # 0°=แนวนอน, 90°=แนวตั้ง
-        if a <= ang_tol: nearest_h.append(best_d)
-        elif abs(90.0 - a) <= ang_tol: nearest_v.append(best_d)
 
-    med_h = float(np.median(nearest_h)) if nearest_h else None
-    med_v = float(np.median(nearest_v)) if nearest_v else None
+        if not math.isfinite(best_d):
+            continue
+
+        nearest_all.append(best_d)
+
+        # จัดกลุ่มแนวนอน/แนวตั้งเพื่อประเมินสเกลแกน x/y
+        a = math.degrees(math.atan2(best_dy, best_dx))  # (-180, 180]
+        if a < 0:
+            a += 360.0  # 0..360
+
+        # ใกล้ "แนวนอน" = ใกล้ 0° หรือ 180°
+        if min(abs(a - 0.0), abs(a - 180.0)) <= tol:
+            nearest_h.append(best_d)
+        # ใกล้ "แนวตั้ง" = ใกล้ 90° หรือ 270°
+        if min(abs(a - 90.0), abs(a - 270.0)) <= tol:
+            nearest_v.append(best_d)
+
+    # --- สรุปสเกล ---
+    med_h   = float(np.median(nearest_h)) if nearest_h else None
+    med_v   = float(np.median(nearest_v)) if nearest_v else None
     med_all = float(np.median(nearest_all)) if nearest_all else None
 
     mm_per_px_x = (nominal_spacing_mm / med_h) if med_h else None
@@ -211,38 +242,6 @@ def estimate_scale_from_boxes(
         anisotropy_pct = None
 
     px_per_mm = (1.0 / mm_per_px) if mm_per_px else None
-    # --- ใน estimate_scale_from_boxes(...)
-
-    # หลังคำนวณ nearest_h / nearest_v เสร็จ เราจะคำนวณมุมเด่นของแกน X
-    angles_h_raw = []
-    for i in range(n):
-        # หาเพื่อนบ้านที่ใกล้สุดอีกที เพื่อดึงมุมจริงของเส้นที่จัดเป็นแนวนอน
-        best_d = float("inf"); best_dx = best_dy = 0.0; jj = -1
-        for j in range(n):
-            if i == j: continue
-            dx = pts[j, 0] - pts[i, 0]
-            dy = pts[j, 1] - pts[i, 1]
-            d  = math.hypot(dx, dy)
-            if 1e-6 < d < best_d:
-                best_d, best_dx, best_dy, jj = d, dx, dy, j
-        if not math.isfinite(best_d): 
-            continue
-        a = math.degrees(math.atan2(best_dy, best_dx))  # (-180, 180]
-        aa = abs(a)
-        if aa <= ang_tol:            # มองเป็นเพื่อนบ้านแนวนอน
-            # นอร์มัลไลซ์ให้มาอยู่ในช่วง [-90, +90] เพื่อค่ากลางนิ่ง
-            if a > 90:   a -= 180
-            if a < -90:  a += 180
-            angles_h_raw.append(a)
-
-
-    angle_deg = float(np.median(angles_h_raw)) if angles_h_raw else 0.0
-    angle_std_deg = float(np.std(angles_h_raw)) if angles_h_raw else None
-
-    # unit vectors ของแกนกริด (แกน X คือแนวนอนของกริด)
-    th = math.radians(angle_deg)
-    ux, uy = math.cos(th), math.sin(th)          # แกน X (แนวนอนของกริด)
-    vx, vy = -math.sin(th), math.cos(th)         # แกน Y (แนวตั้งของกริด)
 
     return {
         "mm_per_px": mm_per_px,
@@ -252,14 +251,7 @@ def estimate_scale_from_boxes(
         "n_pairs_x": len(nearest_h),
         "n_pairs_y": len(nearest_v),
         "anisotropy_pct": anisotropy_pct,
-        # ใหม่เพิ่ม:
-        "angle_deg": angle_deg,
-        "angle_std_deg": angle_std_deg,
-        "ux": ux, "uy": uy, "vx": vx, "vy": vy,
     }
-
-
-
 
 # ===========================
 # === CORE (INTERNAL API) ===
@@ -342,6 +334,33 @@ def _crop_circle_quadrants(
     # หมายเหตุ: (sx, sy, ex, ey) ที่คืนยังเป็นกรอบดั้งเดิมก่อนหมุน (พิกัดภาพต้นฉบับ)
     return out_quads, (sx, sy, ex, ey)
 
+def angle_from_first_and_its_nearest(boxes: List[NozzleBox], full360: bool = True) -> float:
+    """
+    เลือกจุดกล่องใบแรก แล้วหา 'เพื่อนบ้านที่ใกล้ที่สุด' ของมัน
+    คืนมุมของเส้นระหว่างสองจุดนี้เทียบแกน X (องศา)
+    full360=True → 0..360°, False → -180..+180°
+    """
+    if len(boxes) < 2:
+        return 0.0
+
+    x1, y1 = float(boxes[0].cx), float(boxes[0].cy)
+    best_d = float("inf"); bx = by = None
+
+    for k in range(1, len(boxes)):
+        dx = float(boxes[k].cx) - x1
+        dy = float(boxes[k].cy) - y1
+        d  = math.hypot(dx, dy)
+        if d > 1e-6 and d < best_d:
+            best_d = d
+            bx, by = float(boxes[k].cx), float(boxes[k].cy)
+
+    if bx is None:
+        return 0.0
+
+    a = math.degrees(math.atan2(by - y1, bx - x1))  # (-180, 180]
+    if full360 and a < 0:
+        a += 360.0
+    return a
 
 
 from typing import Dict
@@ -367,10 +386,24 @@ def _analyze_nozzles(
     det = NozzleDetector(weights_path, imgsz=imgsz, conf=conf, iou=iou)
     boxes = det.detect(img)
 
-    # === คำนวณสเกลจากกล่อง ===
+    # (ออปชัน) ทำให้ box แรกคงที่: กล่องบนซ้ายสุด
+    # boxes.sort(key=lambda b: (b.cy, b.cx))
+
+    # === สเกลจากกล่อง (ตามเดิม) ===
     scale = estimate_scale_from_boxes(boxes, nominal_spacing_mm=173.0)
     mm_per_px = scale.get("mm_per_px", None)
-    angle_deg = float(scale.get("angle_deg", 0.0))
+
+    # === มุมจาก "กล่องแรก ↔ เพื่อนบ้านที่ใกล้ที่สุด" (Option C) ===
+    angle_deg_c = angle_from_first_and_its_nearest(boxes, full360=True)
+
+    # override มุมใน scale เพื่อให้ developerTest ใช้ต่อได้เหมือนเดิม
+    scale["angle_deg"] = float(angle_deg_c)
+    th = math.radians(angle_deg_c)
+    scale["ux"], scale["uy"] = math.cos(th), math.sin(th)
+    scale["vx"], scale["vy"] = -math.sin(th), math.cos(th)
+
+    # ดึงมุมไปใช้ตัด/หาศูนย์กลาง
+    angle_deg = scale["angle_deg"]
 
     stem = os.path.splitext(os.path.basename(image_path))[0]
     out_dir = os.path.join(save_rois_dir, stem) if save_rois_dir else None
@@ -381,12 +414,18 @@ def _analyze_nozzles(
 
     for idx, box in enumerate(boxes, start=1):
         quads, _ = _crop_circle_quadrants(
-            img, box, pad_ratio=pad_ratio, mm_per_px=mm_per_px, angle_deg=angle_deg
+            img, box,
+            pad_ratio=pad_ratio,
+            mm_per_px=mm_per_px,
+            angle_deg=-angle_deg      # << ใช้มุมจาก Option C
         )
         if out_dir: _save_rois(quads, out_dir, stem, idx)
 
         centers = _quadrant_centers(
-            box, pad_ratio, mm_per_px=mm_per_px, angle_deg=angle_deg
+            box,
+            pad_ratio,
+            mm_per_px=mm_per_px,
+            angle_deg=angle_deg      # << ใช้มุมเดียวกัน
         )
         quad_centers.append(centers)
 
@@ -398,7 +437,6 @@ def _analyze_nozzles(
                 statuses.append(False)
         quad_statuses.append(statuses)
 
-    # **ส่งออก scale ออกไปด้วย**
     return img, boxes, quad_statuses, quad_centers, scale
 
 
@@ -433,12 +471,20 @@ def detect_blocked_nozzles(
         modelClassifyname=classifyModel
     )
 
-    blocked_points: List[Tuple[int, int]] = []
+    blocked_points_mm: List[Tuple[float, float]] = []
+
+    mm_per_px = scale.get("mm_per_px", None)  # ได้จาก _analyze_nozzles
+
     for statuses, centers in zip(quad_statuses, quad_centers):
         for is_blocked, (x, y) in zip(statuses, centers):
-            if bool(is_blocked):
-                blocked_points.append((int(x), int(y)))
-    return blocked_points
+            if bool(is_blocked) and mm_per_px:
+                # แปลง pixel → mm
+                x_mm = float(x) * mm_per_px
+                y_mm = float(y) * mm_per_px
+                blocked_points_mm.append((x_mm, y_mm))
+
+    return blocked_points_mm
+
 
 
 # # ================================
@@ -562,14 +608,14 @@ def developerTest(
 
     for n, (box, statuses, centers) in enumerate(zip(boxes, quad_statuses, quad_centers), start=1):
         x1, y1, x2, y2 = map(int, (box.x1, box.y1, box.x2, box.y2))
-        cv2.rectangle(vis, (x1, y1), (x2, y2), cyan, 2)
+        # cv2.rectangle(vis, (x1, y1), (x2, y2), cyan, 2)
 
         conf_val = _get_box_confidence(box)
         label_text = f"#{n}  {conf_val*100:.1f}%" if conf_val is not None else f"#{n}"
-        _put_label_with_bg(
-            vis, label_text, (x1, max(0, y1 - 6)),
-            font_scale=0.6, thickness=2, text_color=cyan, bg_color=(0,0,0)
-        )
+        # _put_label_with_bg(
+        #     vis, label_text, (x1, max(0, y1 - 6)),
+        #     font_scale=0.6, thickness=2, text_color=cyan, bg_color=(0,0,0)
+        # )
 
         # วาดวงกลม nozzle
         cx, cy, R = _circle_from_box(box)
@@ -590,23 +636,36 @@ def developerTest(
     mm_per_px = scale.get("mm_per_px")
     # helper ทำข้อความพิกัด
     def _coord_label(px, py):
-        # if mm_per_px:
-        #     x_mm = px * mm_per_px
-        #     y_mm = py * mm_per_px
-        #     return f"{int(px)} {int(py)}  |  {x_mm:.1f}mm {y_mm:.1f}mm"
-        # else:
-        #     return f"{int(px)} {int(py)}"
+        if mm_per_px:
+            x_mm = px * mm_per_px
+            y_mm = py * mm_per_px
+            return f"{x_mm:.1f}mm {y_mm:.1f}mm"
+        else:
+            return f"{int(px)} {int(py)}"
         
-        return f"{int(px)} {int(py)}"
+        # return f"{int(px)} {int(py)}"
 
     for n, (box, statuses, centers) in enumerate(zip(boxes, quad_statuses, quad_centers), start=1):
         # ... วาด bbox, วงกลม, เส้นแกนเอียง เหมือนที่เราแก้ก่อนหน้า ...
+        overlay = vis.copy()   # ชั้นโปร่งใส
+        alpha = 0.35           # ความโปร่งใส (0 = ไม่วาด, 1 = ทึบ)
+        radius = 8             # รัศมีวง
+        thick  = 2             # ความหนาของวงแหวน
 
         # วางมาร์คและป้าย "ชื่อพิกัด" แทน TL/TR/BL/BR
         for is_blocked, (px, py) in zip([bool(x) for x in statuses], centers):
-            color = (0, 0, 255) if is_blocked else (60, 200, 60)  # แดง=blocked, เขียว=clear
-            cv2.circle(vis, (int(px), int(py)), 6, color, -1, lineType=cv2.LINE_AA)
+            # color = (0, 0, 255) if is_blocked else (60, 200, 60)  # แดง=blocked, เขียว=clear
+            # cv2.circle(vis, (int(px), int(py)), 5, color, -1, lineType=cv2.LINE_AA)
+            center = (int(px), int(py))
+            color  = (0, 0, 255) if is_blocked else (60, 200, 60)
 
+            # วาด "วงแหวน" ลง overlay (โปร่งใส) — ไม่ทึบพื้นหลัง
+            cv2.circle(overlay, center, radius, color, thick, lineType=cv2.LINE_AA)
+
+            # (ออปชัน) ถ้าอยากมีไฮไลต์แบบเติมสีจาง ๆ ข้างในด้วยก็ทำเพิ่ม:
+            # cv2.circle(overlay, center, radius-2, color, -1, lineType=cv2.LINE_AA)
+
+        
             label = _coord_label(px, py)  # <<== ใช้พิกัดเป็นชื่อ
             _put_label_with_bg(
                 vis, label, (int(px) + 8, int(py) - 8),
@@ -616,6 +675,11 @@ def developerTest(
 
             if is_blocked:
                 blocked_points.append((int(px), int(py)))
+
+        cv2.addWeighted(overlay, alpha, vis, 1 - alpha, 0, vis)
+    
+    
+
 
 
     # บันทึกภาพ / แสดงหน้าต่าง เท่าเดิม
@@ -637,7 +701,7 @@ def developerTest(
 # ============================
 
 if __name__ == "__main__":
-    folder = r"C:\Project\nozzleScan\pictures\direction"
+    folder = r"C:\Project\nozzleScan\pictures"
     outdir = None  # set to a folder to dump raw quadrant ROIs per image
     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
@@ -658,7 +722,7 @@ if __name__ == "__main__":
                 imgsz=1280, conf=0.9, iou=0.5, pad_ratio=0.05,
                 show=True, wait_ms=1,
                 save_path=None,          # e.g., "out/out.jpg"
-                save_rois_dir=outdir
+                save_rois_dir=None
             )
             print(f"[{idx+1}/{len(pictures)}] {fname}")
 
